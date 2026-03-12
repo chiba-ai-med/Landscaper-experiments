@@ -5,11 +5,15 @@ Landscaper（エネルギーランドスケープ解析）を用いた単一細�
 ## プロジェクト構成
 
 ```
-workflow/   Snakemakeワークフロー (.smk)
-src/        R/shellスクリプト
-data/       入力データ (Seuratオブジェクト, GO gene sets等)
+workflow/   Snakemakeワークフロー (.smk) + ユーティリティスクリプト
+src/        R/shellスクリプト + Rcppソース (widest_paths.cpp)
+data/       入力データ
+  hpbase/   HPBaseデータ (アノテーション xlsx等)
+  Oulhen/   Oulhenデータ (Seuratオブジェクト .rds等)
+  *.RData   GO gene sets (go_bp_hpbase.RData等)
 output/     中間・最終出力
 plot/       可視化結果
+report/     Snakemake HTMLレポート (各ワークフローごと)
 logs/       実行ログ
 benchmarks/ 実行時間・メモリ記録
 ```
@@ -34,15 +38,25 @@ oulhen.smk              Oulhenデータ専用パイプライン (上記の大部
 
 各ワークフローは独立して実行: `snakemake -s workflow/<name>.smk`
 
+### ユーティリティスクリプト
+
+| ファイル | 用途 |
+|---------|------|
+| `workflow/dag.sh` | 全ワークフローのDAGルールグラフをPNG生成 (`plot/*.png`) |
+| `workflow/report.sh` | 全ワークフローのSnakemake HTMLレポート生成 (`report/*.html`) |
+
 ## 共通設定・パラメータ
 
 ```python
-PCS = list(range(3, 13))  # PC3〜PC12
-SAMPLES = ['cont', 'DAPT', 'integrated']               # 基本3条件
-# covありバージョン: 'cont_cov', 'DAPT_cov', 'integrated_cov'
-OULHEN_SAMPLES = ['cont', 'DAPT', 'integrated']         # Oulhen用
-GOS = ['bp', 'mf', 'cc']                                # GO ontology types
-KFOLD = 5; SEED = 1                                     # PC AUC rank用
+# preprocess.smk のみ PC2から開始
+PCS = list(range(2, 13))  # PC2〜PC12 (preprocess.smk)
+PCS = list(range(3, 13))  # PC3〜PC12 (他の全ワークフロー)
+
+SAMPLES = ['cont', 'DAPT', 'integrated',
+           'cont_cov', 'DAPT_cov', 'integrated_cov']    # HPBase 6条件
+OULHEN_SAMPLES = ['cont', 'DAPT', 'integrated']          # Oulhen用 (covなし)
+GOS = ['bp', 'mf', 'cc']                                 # GO ontology types
+KFOLD = 5; SEED = 1                                      # PC AUC rank用
 ```
 
 ## Dockerコンテナ
@@ -113,7 +127,7 @@ save(result, file=outfile)  # or write.table()
 ```
 
 - 引数は `commandArgs(trailingOnly=TRUE)` で受け取る
-- 共通関数は `source("src/Functions.R")` でロード
+- 共通関数は `source("src/Functions.R")` でロード（主要関数は後述）
 - Seurat v5対応: `GetAssayData()` の前に `JoinLayers()` が必要な場合がある
 
 ```r
@@ -122,6 +136,24 @@ if (inherits(seurat.integrated[["RNA"]], "Assay5")) {
 }
 expr <- GetAssayData(seurat.integrated, assay="RNA", layer="data")
 ```
+
+## src/Functions.R 主要関数
+
+| カテゴリ | 関数 | 概要 |
+|---------|------|------|
+| Fate Probability | `build_QR`, `absorption_probabilities`, `fate_entropy`, `fate_argmax` | 吸収確率・可塑性・運命割当 |
+| 遷移確率行列 | `transition_matrix_from_E` | Metropolis/Glauber kernel、時系列制約オプション付き |
+| ベクトル場 | `drift_from_P`, `make_arrow_df`, `make_vector_grid` | 粗視化ドリフト・矢印・補間グリッド |
+| 可視化 | `base_plot` | UMAP散布図 (mode: germlayer/cluster/sample/celltype/state/energy) |
+| グラフ | `hamming1_adjacency`, `sparsify_by_threshold` | ハミング距離1隣接行列・スパース化 |
+| エネルギー | `E_with_cov`, `compute_curve` | 共変量付きエネルギー計算・ε依存曲線 |
+| Seurat操作 | `.labelStratify`, `.stratifySeurat` 系, `.panelPlot` 系, `.BarPlot` | サンプル層別化・パネル可視化 |
+
+定数: `markers`, `fig2_markers`, `fig3_markers`, `fig2_celltypes`, `germlayer_colors`, `sample_colors`, `energy_limits` 等
+
+## src/widest_paths.cpp
+
+Dijkstra法ベースの最広パス問題ソルバー (Rcpp)。遷移確率行列上で「経路中の最小重みを最大化」するパスを求める。
 
 ## 主要データオブジェクト
 
@@ -186,3 +218,5 @@ Oulhenデータの場合は `output/oulhen/`, `plot/oulhen/` 以下。
 4. **integrated先行**: cont/DAPTのLandscaperは `integrated` の `Coordinate.tsv` を共有座標として使用
 5. **cov有無**: Oulhenデータにはcov.tsvがないため、postprocessスクリプトが異なる (`postprocess_landscaper_Oulhen.R`)
 6. **FINISHマーカー**: 複数ファイルを出力するルールではFINISHファイルを使って完了を示す
+7. **Oulhen専用スクリプト**: `*_Oulhen.R`/`*_Oulhen.sh` のように `_Oulhen` サフィックスで区別
+8. **LFILES/PLOTFILES**: `landscaper.smk` ではLandscaper出力ファイルリスト (`LFILES`) を定義し、plotファイルのみ抽出した `PLOTFILES` も使用
