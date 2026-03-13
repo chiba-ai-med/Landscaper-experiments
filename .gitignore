@@ -9,7 +9,8 @@
 output
 data
 .snakemake
-plot
+plot/*
+!plot/*.png
 benchmarks
 plogs
 logs
